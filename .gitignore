@@ -1,0 +1,29 @@
+# Vivado
+build/
+.Xil/
+*.jou
+*.log
+*.str
+vivado_pid*.zip
+usage_statistics_webtalk.*
+
+# cocotb / simulators
+sim/sim_build/
+sim/results.xml
+*.vcd
+*.fst
+*.ghw
+obj_dir/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
