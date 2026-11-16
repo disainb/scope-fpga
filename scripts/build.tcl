@@ -22,7 +22,8 @@ read_verilog [glob [file join $root rtl xilinx *.v]]
 read_xdc     [file join $root constraints cmod_a7.xdc]
 
 # ---- synthesis --------------------------------------------------------------
-synth_design -top $top -part $part -flatten_hierarchy rebuilt
+synth_design -top $top -part $part -flatten_hierarchy rebuilt \
+             -include_dirs [list [file join $root rtl]]
 write_checkpoint -force [file join $out post_synth.dcp]
 report_utilization -file [file join $out util_synth.rpt]
 
