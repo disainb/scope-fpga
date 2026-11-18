@@ -79,6 +79,8 @@ module cmod_top #(
     wire [14:0] cfg_ss, cfg_pt;
     wire [1:0]  cfg_tm;
     wire [7:0]  cfg_tl, cfg_th;
+    wire [1:0]  cfg_ck;
+    wire [7:0]  bus_now;
     wire        cap_arm, cap_abort, cap_done, cap_trig, cap_busy;
     wire [13:0] rd_rel;
     wire [7:0]  rd_data;
@@ -93,6 +95,7 @@ module cmod_top #(
         .cfg_n(cfg_n), .cfg_d(cfg_d), .cfg_ph(cfg_ph), .cfg_tp(cfg_tp),
         .cfg_ss(cfg_ss), .cfg_pt(cfg_pt), .cfg_tm(cfg_tm), .cfg_te(cfg_te),
         .cfg_tl(cfg_tl), .cfg_th(cfg_th), .adc_pd(adc_pd),
+        .cfg_ck(cfg_ck), .bus_now(bus_now),
         .cap_arm(cap_arm), .cap_abort(cap_abort), .cap_done(cap_done),
         .cap_trig(cap_trig), .rd_rel(rd_rel), .rd_data(rd_data),
         .running(running), .cont_mode(cont_mode)
@@ -106,8 +109,9 @@ module cmod_top #(
         .clk(clk), .rst(rst),
         .cfg_n(cfg_n), .cfg_d(cfg_d), .cfg_ph(cfg_ph), .cfg_tp(cfg_tp),
         .cfg_ss(cfg_ss), .cfg_pt(cfg_pt), .cfg_tm(cfg_tm), .cfg_te(cfg_te),
-        .cfg_tl(cfg_tl), .cfg_th(cfg_th),
+        .cfg_tl(cfg_tl), .cfg_th(cfg_th), .cfg_ck(cfg_ck),
         .clk_d1(clk_d1), .clk_d2(clk_d2), .q_rise(q_rise), .q_fall(q_fall),
+        .bus_now(bus_now),
         .arm(cap_arm), .abort(cap_abort), .busy(cap_busy), .done(cap_done),
         .trig_real(cap_trig), .rd_rel(rd_rel), .rd_data(rd_data)
     );

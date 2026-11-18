@@ -153,7 +153,7 @@ async def test_status_defaults(dut):
     await u.cmd("?")
     st = await u.line()
     assert st == ("OK SR=10000000SPS ADC=10000000Hz SS=1024 PT=0 OF=N TM=A TE=R "
-                  f"TL=128 TH=4 PH=10 PD=0 TP=0 BR={BAUD}"), st
+                  f"TL=128 TH=4 PH=10 PD=0 TP=0 CK=S BR={BAUD}"), st
 
 
 @cocotb.test()
@@ -293,3 +293,36 @@ async def test_baud_change(dut):
     u.set_baud(2_000_000)
     await u.cmd("?")
     assert (await u.line()).startswith("OK SR=")
+
+
+async def count_edges(sig, ns):
+    n = 0
+    async def cnt():
+        nonlocal n
+        while True:
+            await RisingEdge(sig)
+            n += 1
+    t = cocotb.start_soon(cnt())
+    await Timer(ns, unit="ns")
+    t.cancel()
+    return n
+
+
+@cocotb.test()
+async def test_bringup_clock_hold_and_read_bus(dut):
+    """CK=0/1 holds the ADC clock pin static; CK=S restarts it; RB reads the pins."""
+    u, _ = await setup(dut)
+    assert await count_edges(dut.adc_clk, 2000) >= 15        # 10 MHz running
+    for cmd, level in (("CK=1", 1), ("CK=0", 0)):
+        await u.cmd(cmd)
+        assert f"CK={level}" in await u.line()
+        assert await count_edges(dut.adc_clk, 2000) == 0
+        assert int(dut.adc_clk.value) == level
+    await Timer(100, unit="ns")
+    dut.adc_d.value = 0xA5                 # ADC model idle: no clock edges
+    await Timer(100, unit="ns")
+    await u.cmd("RB")
+    assert await u.line() == "BUS=165 D7..D0=10100101"
+    await u.cmd("CK=S")
+    assert "CK=S" in await u.line()
+    assert await count_edges(dut.adc_clk, 2000) >= 15

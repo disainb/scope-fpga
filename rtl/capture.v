@@ -36,11 +36,13 @@ module capture #(
     input  wire          cfg_te,         // 0 rising, 1 falling
     input  wire [7:0]    cfg_tl,
     input  wire [7:0]    cfg_th,
+    input  wire [1:0]    cfg_ck,         // 0 run, 1 hold low, 2 hold high
     // to / from the I/O wrapper
     output reg           clk_d1,
     output reg           clk_d2,
     input  wire [7:0]    q_rise,
     input  wire [7:0]    q_fall,
+    output reg  [7:0]    bus_now,        // raw data pins, for bring-up
     // control
     input  wire          arm,
     input  wire          abort,
@@ -62,8 +64,14 @@ module capture #(
     always @(posedge clk) begin
         if (rst || pc >= nn - 4'd1) pc <= 4'd0;
         else                        pc <= pc + 4'd1;
-        clk_d1 <= (pc < half) || (nn[0] && pc == half);
-        clk_d2 <= (pc < half);
+        if (cfg_ck == 2'd0) begin
+            clk_d1 <= (pc < half) || (nn[0] && pc == half);
+            clk_d2 <= (pc < half);
+        end else begin
+            clk_d1 <= cfg_ck[1];
+            clk_d2 <= cfg_ck[1];
+        end
+        bus_now <= q_rise;
     end
 
     // ---- sample select and decimation -----------------------------------------

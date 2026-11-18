@@ -6,7 +6,7 @@
 // silence, so terminals that send no line ending still work). Case-insensitive,
 // spaces ignored. Token = KEY[=]VALUE, KEY is 1-2 letters:
 //   SR=10MSPS  SS=1024  PT=0  OFN|OFX|OFB  TMA|TMN|TMI  TER|TEF  TL=128  TH=4
-//   PH=n|PHA  PD=0|1  TP=0|1  BR=115200  R  C  D  ?  H
+//   PH=n|PHA  PD=0|1  TP=0|1  BR=115200  CK=S|0|1  RB  R  C  D  ?  H
 // Settings-only lines answer with the status line ("OK SR=..."); lines with
 // R/C/D/?/H answer with their output only. An error prints "ERR at col n" and
 // discards the rest of the line. While a capture or dump runs, any received
@@ -41,6 +41,8 @@ module scope_ctrl #(
     output reg  [7:0]  cfg_tl,
     output reg  [7:0]  cfg_th,
     output reg         adc_pd,
+    output reg  [1:0]  cfg_ck,
+    input  wire [7:0]  bus_now,
     // capture control / readout
     output reg         cap_arm,
     output reg         cap_abort,
@@ -82,6 +84,7 @@ module scope_ctrl #(
     reg [4:0]  ph_val;
     reg        ph_auto;
     reg [15:0] pend_cpb;
+    reg [7:0]  bus_snap;
     reg        pend_baud;
 
     assign cfg_ph = ph_auto ? {1'b0, cfg_n} : ph_val;
@@ -152,6 +155,7 @@ module scope_ctrl #(
             V_D:     vval = {8'd0, cfg_d};
             V_COL:   vval = {25'd0, tok_col};
             V_NLAST: vval = {17'd0, n_last};
+            V_BUS:   vval = {24'd0, bus_snap};
             default: vval = 32'd0;
         endcase
     end
@@ -162,6 +166,15 @@ module scope_ctrl #(
             C_OF:    cval = (of == OF_X) ? "X" : (of == OF_B) ? "B" : "N";
             C_TM:    cval = (cfg_tm == 2'd1) ? "N" : (cfg_tm == 2'd2) ? "I" : "A";
             C_TE:    cval = cfg_te ? "F" : "R";
+            C_CK:    cval = (cfg_ck == 2'd1) ? "0" : (cfg_ck == 2'd2) ? "1" : "S";
+            C_B7:    cval = bus_snap[7] ? "1" : "0";
+            C_B6:    cval = bus_snap[6] ? "1" : "0";
+            C_B5:    cval = bus_snap[5] ? "1" : "0";
+            C_B4:    cval = bus_snap[4] ? "1" : "0";
+            C_B3:    cval = bus_snap[3] ? "1" : "0";
+            C_B2:    cval = bus_snap[2] ? "1" : "0";
+            C_B1:    cval = bus_snap[1] ? "1" : "0";
+            C_B0:    cval = bus_snap[0] ? "1" : "0";
             default: cval = "?";
         endcase
     end
@@ -192,6 +205,8 @@ module scope_ctrl #(
             cfg_tl    <= 8'd128;
             cfg_th    <= 8'd4;
             adc_pd    <= 1'b0;
+            cfg_ck    <= 2'd0;
+            bus_snap  <= 8'd0;
             sr_eff    <= SYS / 10;
             adc_hz    <= SYS / 10;
             br_val    <= BR0;
@@ -389,6 +404,18 @@ module scope_ctrl #(
                                 br_req <= num;
                                 state  <= X_BR1;
                             end else state <= E_ERR;
+                        "CK":
+                            if      (vch == "S")                cfg_ck <= 2'd0;
+                            else if (has_num && num == 32'd0)   cfg_ck <= 2'd1;
+                            else if (has_num && num == 32'd1)   cfg_ck <= 2'd2;
+                            else state <= E_ERR;
+                        "RB": begin
+                            printed  <= 1'b1;
+                            bus_snap <= bus_now;
+                            m_addr   <= MSG_BUS;
+                            m_ret    <= P_TOK;
+                            state    <= M_FETCH;
+                        end
                         "R ": begin
                             printed   <= 1'b1;
                             cont_mode <= 1'b0;
