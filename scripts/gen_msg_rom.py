@@ -13,15 +13,17 @@ import os
 import re
 
 DEC_VARS = ["sr", "adc", "ss", "pt", "tl", "th", "ph", "pd", "tp",
-            "br", "trig", "n", "d", "col", "nlast"]
-CHR_VARS = ["of", "tm", "te"]
+            "br", "trig", "n", "d", "col", "nlast", "bus"]
+CHR_VARS = ["of", "tm", "te", "ck",
+            "b7", "b6", "b5", "b4", "b3", "b2", "b1", "b0"]
 
-VERSION = "v0.2"
+VERSION = "v0.3"
 
 MSGS = [
     ("BANNER", f"\r\nscope-fpga ADC08200 test {VERSION}   (H = help)\r\n"),
     ("STATUS", "OK SR={sr}SPS ADC={adc}Hz SS={ss} PT={pt} OF={$of} TM={$tm} "
-               "TE={$te} TL={tl} TH={th} PH={ph} PD={pd} TP={tp} BR={br}\r\n"),
+               "TE={$te} TL={tl} TH={th} PH={ph} PD={pd} TP={tp} CK={$ck} BR={br}\r\n"),
+    ("BUS",    "BUS={bus} D7..D0={$b7}{$b6}{$b5}{$b4}{$b3}{$b2}{$b1}{$b0}\r\n"),
     ("ERR",    "ERR at col {col}\r\n"),
     ("NODATA", "ERR no capture yet\r\n"),
     ("STOP",   "STOPPED\r\n"),
@@ -42,6 +44,8 @@ MSGS = [
      " PD=0|1        ADC power-down\r\n"
      " TP=0|1        test pattern: ramp instead of ADC data\r\n"
      " BR=n          UART baud, e.g. BR=921600 (btn0 restores 115200)\r\n"
+     " CK=S|0|1      ADC clock: S=running, 0/1 = held low/high (pin check)\r\n"
+     " RB            read the ADC data pins once (bring-up check)\r\n"
      " R             run one capture and send it\r\n"
      " C             run continuously, send any key to stop\r\n"
      " D             send the last capture again\r\n"

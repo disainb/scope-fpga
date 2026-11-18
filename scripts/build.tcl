@@ -38,6 +38,7 @@ report_timing_summary -max_paths 20 -file [file join $out timing.rpt]
 report_utilization                  -file [file join $out util.rpt]
 report_drc                          -file [file join $out drc.rpt]
 report_clock_utilization            -file [file join $out clocks.rpt]
+report_io                           -file [file join $out io.rpt]
 
 # ---- timing gate ------------------------------------------------------------
 set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
