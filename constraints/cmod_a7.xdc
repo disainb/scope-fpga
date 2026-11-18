@@ -36,7 +36,17 @@ set_property -dict { PACKAGE_PIN R2  IOSTANDARD LVCMOS33 } [get_ports {adc_d[5]}
 set_property -dict { PACKAGE_PIN T3  IOSTANDARD LVCMOS33 } [get_ports {adc_d[6]}] ;# DIP 27 - ADC 14
 set_property -dict { PACKAGE_PIN R3  IOSTANDARD LVCMOS33 } [get_ports {adc_d[7]}] ;# DIP 26 - ADC 13
 set_property -dict { PACKAGE_PIN W3  IOSTANDARD LVCMOS33 } [get_ports adc_pd]     ;# DIP 34 - ADC 23
-set_property -dict { PACKAGE_PIN W5  IOSTANDARD LVCMOS33 SLEW SLOW DRIVE 8 } [get_ports adc_clk] ;# DIP 36 - ADC 24
+## ADC clock goes up to 200 MHz: fast slew. Drop to SLEW SLOW if the breadboard
+## wiring rings badly at 10-50 MHz (slow slew is too slow for 200 MHz).
+set_property -dict { PACKAGE_PIN W5  IOSTANDARD LVCMOS33 SLEW FAST DRIVE 8 } [get_ports adc_clk] ;# DIP 36 - ADC 24
+
+## Configuration flash, used after configuration for the board revision record
+## (last 4 KB sector). SCK reaches the flash through STARTUPE2 (CCLK).
+set_property -dict { PACKAGE_PIN K19 IOSTANDARD LVCMOS33 } [get_ports qspi_cs]
+set_property -dict { PACKAGE_PIN D18 IOSTANDARD LVCMOS33 } [get_ports qspi_dq0]
+set_property -dict { PACKAGE_PIN D19 IOSTANDARD LVCMOS33 } [get_ports qspi_dq1]
+set_property -dict { PACKAGE_PIN G18 IOSTANDARD LVCMOS33 } [get_ports qspi_dq2]
+set_property -dict { PACKAGE_PIN F18 IOSTANDARD LVCMOS33 } [get_ports qspi_dq3]
 
 ## -----------------------------------------------------------------------------
 ## Timing exceptions for asynchronous / slow I/O
@@ -44,10 +54,19 @@ set_property -dict { PACKAGE_PIN W5  IOSTANDARD LVCMOS33 SLEW SLOW DRIVE 8 } [ge
 set_false_path -from [get_ports {btn[*] uart_txd_in}]
 set_false_path -to   [get_ports {led[*] led0_* uart_rxd_out}]
 
-## ADC: the capture point is chosen at run time with the PH command (5 ns
+## ADC: the capture point is chosen at run time with the PH command (2.5 ns
 ## steps), so the board-level I/O timing is calibrated on the bench, not by STA.
 set_false_path -from [get_ports {adc_d[*]}]
 set_false_path -to   [get_ports {adc_clk adc_pd}]
+
+## Flash: slow SPI (12.5 MHz) driven from registers, sampled with half a
+## period of margin by design.
+set_false_path -to   [get_ports {qspi_cs qspi_dq0 qspi_dq2 qspi_dq3}]
+set_false_path -from [get_ports qspi_dq1]
+
+## 100 MHz <-> 200 MHz: both from the same MMCM, so Vivado times the crossings
+## as synchronous. arm/abort/done use toggle synchronisers (ASYNC_REG) and the
+## configuration registers only change while no capture runs.
 
 ## -----------------------------------------------------------------------------
 ## Configuration

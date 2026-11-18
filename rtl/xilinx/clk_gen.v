@@ -1,31 +1,34 @@
 `timescale 1ns / 1ps
 // -----------------------------------------------------------------------------
 // clk_gen.v  (Xilinx 7-series wrapper)
-//   12 MHz -> MMCM -> 100 MHz
-//   VCO = 12 MHz * 62.5 = 750 MHz (range 600-1200), CLKOUT0 = 750 / 7.5 = 100 MHz
+//   12 MHz -> MMCM -> 100 MHz (system) + 200 MHz (ADC capture), phase aligned
+//   VCO = 12 MHz * 50 = 600 MHz (7-series range 600-1200 MHz)
+//   CLKOUT0 = 600 / 6 = 100 MHz,  CLKOUT1 = 600 / 3 = 200 MHz
 //
-// Vendor-specific: the Gowin version lives in rtl/gowin/clk_gen.v with the
-// same port list. A behavioural stub for simulation is in sim/stubs/clk_gen.v.
-// Later: add a phase-shifted CLKOUT1 for ADC data capture.
+// Gowin version: rtl/gowin/clk_gen.v, same ports. Sim model: sim/stubs/clk_gen.v
 // -----------------------------------------------------------------------------
 module clk_gen (
     input  wire clk_in_12m,
     output wire clk_100m,
+    output wire clk_200m,
     output wire locked
 );
     wire clkfb;
-    wire clk0_unbuf;
+    wire clk0_unbuf, clk1_unbuf;
 
     MMCME2_BASE #(
-        .BANDWIDTH        ("OPTIMIZED"),
-        .CLKIN1_PERIOD    (83.333),
-        .DIVCLK_DIVIDE    (1),
-        .CLKFBOUT_MULT_F  (62.5),
-        .CLKFBOUT_PHASE   (0.0),
-        .CLKOUT0_DIVIDE_F (7.5),
-        .CLKOUT0_PHASE    (0.0),
+        .BANDWIDTH         ("OPTIMIZED"),
+        .CLKIN1_PERIOD     (83.333),
+        .DIVCLK_DIVIDE     (1),
+        .CLKFBOUT_MULT_F   (50.0),
+        .CLKFBOUT_PHASE    (0.0),
+        .CLKOUT0_DIVIDE_F  (6.0),
+        .CLKOUT0_PHASE     (0.0),
         .CLKOUT0_DUTY_CYCLE(0.5),
-        .STARTUP_WAIT     ("FALSE")
+        .CLKOUT1_DIVIDE    (3),
+        .CLKOUT1_PHASE     (0.0),
+        .CLKOUT1_DUTY_CYCLE(0.5),
+        .STARTUP_WAIT      ("FALSE")
     ) u_mmcm (
         .CLKIN1   (clk_in_12m),
         .CLKFBIN  (clkfb),
@@ -33,7 +36,7 @@ module clk_gen (
         .CLKFBOUTB(),
         .CLKOUT0  (clk0_unbuf),
         .CLKOUT0B (),
-        .CLKOUT1  (),
+        .CLKOUT1  (clk1_unbuf),
         .CLKOUT1B (),
         .CLKOUT2  (),
         .CLKOUT2B (),
@@ -47,8 +50,6 @@ module clk_gen (
         .RST      (1'b0)
     );
 
-    BUFG u_bufg (
-        .I (clk0_unbuf),
-        .O (clk_100m)
-    );
+    BUFG u_bufg0 (.I(clk0_unbuf), .O(clk_100m));
+    BUFG u_bufg1 (.I(clk1_unbuf), .O(clk_200m));
 endmodule
