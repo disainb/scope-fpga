@@ -91,21 +91,57 @@ module capture #(
     end
 
     // ======================================================================
+    // configuration, re-registered on clk_cap
+    //   The 100 -> 200 MHz crossing is then a plain register-to-register hop;
+    //   derived values (thresholds, phase select) get their own register stage.
+    // ======================================================================
+    reg  [4:0]  m_c = 5'd1, half_c = 5'd0, sel_c = 5'd0;
+    reg         mod_c = 1'b1;
+    reg  [23:0] dm1_c = 24'd0;
+    reg  [5:0]  ph_c = 6'd0;
+    reg         tp_c = 1'b0, te_c = 1'b0;
+    reg  [AW:0] pt_c = {(AW+1){1'b0}}, post_c = {(AW+1){1'b0}};
+    reg  [1:0]  tm_c = 2'd0, ck_c = 2'd0;
+    reg  [7:0]  tl_c = 8'd128, th_c = 8'd0, lo_c = 8'd128, hi_c = 8'd128;
+
+    wire [8:0] lo_s = {1'b0, tl_c} - {1'b0, th_c};
+    wire [8:0] hi_s = {1'b0, tl_c} + {1'b0, th_c};
+
+    always @(posedge clk_cap) begin
+        // stage 1: copies
+        m_c    <= (cfg_m == 5'd0) ? 5'd1 : cfg_m;
+        dm1_c  <= cfg_dm1;
+        ph_c   <= cfg_ph;
+        tp_c   <= cfg_tp;
+        pt_c   <= cfg_pt;
+        post_c <= cfg_post;
+        tm_c   <= cfg_tm;
+        te_c   <= cfg_te;
+        tl_c   <= cfg_tl;
+        th_c   <= cfg_th;
+        ck_c   <= cfg_ck;
+        // stage 2: derived
+        half_c <= {1'b0, m_c[4:1]};
+        mod_c  <= m_c[0];
+        sel_c  <= (ph_c[5:1] >= m_c) ? m_c - 5'd1 : ph_c[5:1];
+        lo_c   <= lo_s[8] ? 8'h00 : lo_s[7:0];
+        hi_c   <= hi_s[8] ? 8'hFF : hi_s[7:0];
+    end
+
+    // ======================================================================
     // ADC clock pattern (clk_cap)
     // ======================================================================
-    wire [4:0] mm   = (cfg_m == 5'd0) ? 5'd1 : cfg_m;
-    wire [4:0] half = {1'b0, mm[4:1]};
     reg  [4:0] pc   = 5'd0;
 
     always @(posedge clk_cap) begin
-        if (c_rst || pc >= mm - 5'd1) pc <= 5'd0;
-        else                          pc <= pc + 5'd1;
-        if (cfg_ck == 2'd0) begin
-            clk_d1 <= (pc < half) || (mm[0] && pc == half);
-            clk_d2 <= (pc < half);
+        if (c_rst || pc >= m_c - 5'd1) pc <= 5'd0;
+        else                           pc <= pc + 5'd1;
+        if (ck_c == 2'd0) begin
+            clk_d1 <= (pc < half_c) || (mod_c && pc == half_c);
+            clk_d2 <= (pc < half_c);
         end else begin
-            clk_d1 <= cfg_ck[1];
-            clk_d2 <= cfg_ck[1];
+            clk_d1 <= ck_c[1];
+            clk_d2 <= ck_c[1];
         end
         bus_now <= q_rise;
     end
@@ -113,8 +149,6 @@ module capture #(
     // ======================================================================
     // sample select and decimation (clk_cap)
     // ======================================================================
-    wire [4:0] sel_c = (cfg_ph[5:1] >= mm) ? mm - 5'd1 : cfg_ph[5:1];
-
     reg        s0_valid = 1'b0;
     reg  [7:0] s0_data;
     reg [23:0] dcnt = 24'd0;
@@ -124,16 +158,16 @@ module capture #(
 
     always @(posedge clk_cap) begin
         s0_valid <= (pc == sel_c);
-        s0_data  <= cfg_ph[0] ? q_fall : q_rise;
+        s0_data  <= ph_c[0] ? q_fall : q_rise;
         s_valid  <= 1'b0;
         if (c_rst) begin
             dcnt <= 24'd0;
             ramp <= 8'd0;
         end else if (s0_valid) begin
-            if (dcnt == cfg_dm1) begin
+            if (dcnt == dm1_c) begin
                 dcnt    <= 24'd0;
                 s_valid <= 1'b1;
-                s_data  <= cfg_tp ? ramp : s0_data;
+                s_data  <= tp_c ? ramp : s0_data;
                 ramp    <= ramp + 8'd1;
             end else
                 dcnt <= dcnt + 24'd1;
@@ -143,14 +177,9 @@ module capture #(
     // ======================================================================
     // trigger (clk_cap)
     // ======================================================================
-    wire [8:0] lo_s = {1'b0, cfg_tl} - {1'b0, cfg_th};
-    wire [8:0] hi_s = {1'b0, cfg_tl} + {1'b0, cfg_th};
-    wire [7:0] lo   = lo_s[8] ? 8'h00 : lo_s[7:0];
-    wire [7:0] hi   = hi_s[8] ? 8'hFF : hi_s[7:0];
-
     reg  edge_armed = 1'b0;
-    wire arm_cond = cfg_te ? (s_data >= hi) : (s_data <= lo);
-    wire hit      = edge_armed && (cfg_te ? (s_data <= cfg_tl) : (s_data >= cfg_tl));
+    wire arm_cond = te_c ? (s_data >= hi_c) : (s_data <= lo_c);
+    wire hit      = edge_armed && (te_c ? (s_data <= tl_c) : (s_data >= tl_c));
 
     // ======================================================================
     // capture state machine (clk_cap)
@@ -174,14 +203,14 @@ module capture #(
         end else if (c_abort) begin
             st <= C_IDLE;
         end else if (c_arm) begin
-            st         <= (cfg_pt == {(AW+1){1'b0}}) ? C_WAIT : C_PRE;
-            cnt        <= {(AW+1){1'b0}};
+            st         <= (pt_c == {(AW+1){1'b0}}) ? C_WAIT : C_PRE;
+            cnt        <= pt_c;                  // pre-trigger samples to go
             to_cnt     <= 26'd0;
             force_t    <= 1'b0;
             edge_armed <= 1'b0;
             trig_c     <= 1'b0;
         end else begin
-            if (st == C_WAIT && cfg_tm == TM_AUTO && !force_t) begin
+            if (st == C_WAIT && tm_c == TM_AUTO && !force_t) begin
                 if (to_cnt == AUTO_TO - 1) force_t <= 1'b1;
                 else                       to_cnt  <= to_cnt + 26'd1;
             end
@@ -190,18 +219,18 @@ module capture #(
                 if (arm_cond) edge_armed <= 1'b1;
                 case (st)
                     C_PRE: begin
-                        cnt <= cnt + 1'b1;
-                        if (cnt + 1'b1 == cfg_pt) st <= C_WAIT;
+                        cnt <= cnt - 1'b1;
+                        if (cnt == {{AW{1'b0}}, 1'b1}) st <= C_WAIT;
                     end
                     C_WAIT:
-                        if (cfg_tm == TM_IMM || hit || force_t) begin
-                            start_a <= wp - cfg_pt[AW-1:0];
-                            trig_c  <= hit && (cfg_tm != TM_IMM);
-                            if (cfg_post == {(AW+1){1'b0}}) begin
+                        if (tm_c == TM_IMM || hit || force_t) begin
+                            start_a <= wp - pt_c[AW-1:0];
+                            trig_c  <= hit && (tm_c != TM_IMM);
+                            if (post_c == {(AW+1){1'b0}}) begin
                                 st     <= C_IDLE;
                                 done_t <= ~done_t;
                             end else begin
-                                cnt <= cfg_post;
+                                cnt <= post_c;
                                 st  <= C_POST;
                             end
                         end
