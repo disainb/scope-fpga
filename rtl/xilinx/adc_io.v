@@ -1,6 +1,7 @@
 `timescale 1ns / 1ps
 // -----------------------------------------------------------------------------
 // adc_io.v  (Xilinx 7-series wrapper)
+//   Clocked by the 200 MHz capture clock.
 //   ADC clock out : ODDR (SAME_EDGE) - Q = D1 while clk high, D2 while clk low
 //   ADC data in   : IDDR (SAME_EDGE_PIPELINED) in the IOB - q_rise is the
 //                   sample taken at a rising clk edge, q_fall the one taken at

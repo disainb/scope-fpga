@@ -6,15 +6,21 @@ and drives the ADC data bus from a behavioural ADC08200 model:
   * 6-clock pipeline latency, data changes tOD = 4 ns after the clock edge
 Timings are shortened via parameters (see sim/Makefile): 1 Mbaud UART,
 0.2 ms line timeout, 0.5 ms auto-trigger timeout.
+The clk_gen stub takes the 200 MHz capture clock on clk_12m and divides it
+by two for the 100 MHz system clock.
 """
 import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "host"))
+import scope_proto as sp  # noqa: E402
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.queue import Queue
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer, with_timeout
 
-SYS_NS = 10
+CAP_NS = 5          # clk_12m pin carries the 200 MHz capture clock in sim
 BAUD = int(os.environ.get("TEST_BAUD", "1000000"))
 
 
@@ -110,8 +116,8 @@ async def setup(dut, func=lambda n: n):
     dut.btn.value = 0b01
     u = Uart(dut, BAUD)
     adc = Adc08200(dut, func)
-    cocotb.start_soon(Clock(dut.clk_12m, SYS_NS, unit="ns").start())
-    await ClockCycles(dut.clk_12m, 20)
+    cocotb.start_soon(Clock(dut.clk_12m, CAP_NS, unit="ns").start())
+    await ClockCycles(dut.clk_12m, 40)
     dut.btn.value = 0
     while True:                       # wait for banner
         if (await u.line()).startswith("scope-fpga"):
@@ -153,7 +159,7 @@ async def test_status_defaults(dut):
     await u.cmd("?")
     st = await u.line()
     assert st == ("OK SR=10000000SPS ADC=10000000Hz SS=1024 PT=0 OF=N TM=A TE=R "
-                  f"TL=128 TH=4 PH=10 PD=0 TP=0 CK=S BR={BAUD}"), st
+                  f"TL=128 TH=4 PH=20 PD=0 TP=0 CK=S BR={BAUD}"), st
 
 
 @cocotb.test()
@@ -168,13 +174,15 @@ async def test_help(dut):
 
 @cocotb.test()
 async def test_sample_rate_rounding(dut):
-    """SR is rounded to f_clk/(N*D); settings-only lines echo the status."""
+    """SR is rounded to 200 MHz/(M*D); settings-only lines echo the status."""
     u, _ = await setup(dut)
     cases = [
         ("SR=10MSPS", 10_000_000, 10_000_000),
         ("SR=25MSPS", 25_000_000, 25_000_000),
         ("SR=33MSPS", 33_333_333, 33_333_333),
-        ("SR=200MSPS", 100_000_000, 100_000_000),
+        ("SR=66MSPS", 66_666_666, 66_666_666),
+        ("SR=200MSPS", 200_000_000, 200_000_000),
+        ("SR=500MSPS", 200_000_000, 200_000_000),
         ("SR=3MSPS", 3_333_333, 10_000_000),
         ("SR=500KSPS", 500_000, 10_000_000),
         ("SR=1000", 1_000, 10_000_000),
@@ -197,11 +205,12 @@ async def test_user_example_testpattern(dut):
 
 @cocotb.test()
 async def test_adc_capture_rates(dut):
-    """Counting ADC: consecutive samples step by D for every N and phase."""
+    """Counting ADC: consecutive samples step by D for every M and phase."""
     u, _ = await setup(dut, func=lambda n: n)
-    cases = [("100MSPS", "0", 1), ("100MSPS", "1", 1), ("50MSPS", "A", 1),
-             ("33MSPS", "A", 1), ("10MSPS", "A", 1), ("10MSPS", "3", 1),
-             ("3MSPS", "A", 3), ("1MSPS", "A", 10)]
+    cases = [("200MSPS", "0", 1), ("200MSPS", "1", 1), ("100MSPS", "0", 1),
+             ("100MSPS", "3", 1), ("66MSPS", "A", 1), ("50MSPS", "A", 1),
+             ("10MSPS", "A", 1), ("10MSPS", "7", 1), ("3MSPS", "A", 3),
+             ("1MSPS", "A", 10)]
     for sr, ph, step in cases:
         vals = await run_ofn(u, f"SR={sr},PH={ph},SS=24,TMI,R", 24)
         assert steps(vals) == [step] * 23, (sr, ph, vals)
@@ -326,3 +335,147 @@ async def test_bringup_clock_hold_and_read_bus(dut):
     await u.cmd("CK=S")
     assert "CK=S" in await u.line()
     assert await count_edges(dut.adc_clk, 2000) >= 15
+
+
+# ----------------------------------------------------------------------------
+# board revision in flash
+# ----------------------------------------------------------------------------
+@cocotb.test()
+async def test_revision_flash(dut):
+    """WR writes the flash sector, RR reads it, value survives a reset."""
+    u, _ = await setup(dut)
+    await u.cmd("RR")
+    assert await u.line() == "REV=--------"            # blank flash
+    await u.cmd("WR=ab12-x07")
+    assert await u.line(timeout_us=50000) == "OK REV=AB12-X07"
+    await u.cmd("RR")
+    assert await u.line() == "REV=AB12-X07"
+    for bad in ("WR=SHORT", "WR=TOOLONG12"):
+        await u.cmd(bad)
+        assert await u.line() == "ERR revision must be 8 characters"
+    # reset: the value is read back from flash at start-up
+    dut.btn.value = 1
+    await ClockCycles(dut.clk_12m, 40)
+    dut.btn.value = 0
+    while not (await u.line()).startswith("scope-fpga"):
+        pass
+    await u.cmd("RR")
+    assert await u.line() == "REV=AB12-X07"
+    assert int(dut.u_fio.bad_access.value) == 0
+
+
+# ----------------------------------------------------------------------------
+# binary packet mode
+# ----------------------------------------------------------------------------
+async def read_frame(u, timeout_us=50000):
+    while (await u.byte(timeout_us)) != sp.SYNC:
+        pass
+    hdr = bytes([await u.byte() for _ in range(3)])
+    n = hdr[1] | (hdr[2] << 8)
+    payload = bytes([await u.byte() for _ in range(n)])
+    c = await u.byte()
+    c |= (await u.byte()) << 8
+    assert sp.crc16(hdr + payload) == c, "bad CRC from device"
+    return hdr[0], payload
+
+
+async def xfer(u, ftype, payload=b"", timeout_us=50000):
+    await u.send(sp.frame(ftype, payload))
+    return await read_frame(u, timeout_us)
+
+
+async def enter_spc(u):
+    await u.cmd("spc")
+    assert (await u.line()).startswith("OK SPC")
+
+
+@cocotb.test()
+async def test_packet_basic(dut):
+    u, _ = await setup(dut)
+    await enter_spc(u)
+    t, p = await xfer(u, sp.PING, b"hello scope")
+    assert (t, p) == (0x81, b"hello scope")
+    t, p = await xfer(u, sp.PING)
+    assert (t, p) == (0x81, b"")
+    t, p = await xfer(u, sp.GET_INFO)
+    info = sp.unpack_info(p)
+    assert t == 0x82 and info["proto"] == 1 and info["adc_bits"] == 8
+    assert info["max_sr"] == 200_000_000 and info["max_samples"] == 16384
+    # configure: ramp test pattern, immediate trigger, 32 samples
+    t, p = await xfer(u, sp.SET_CONFIG,
+                      sp.pack_config(10e6, ss=32, pt=4, tm="immediate", tp=1))
+    cfg = sp.unpack_config(p)
+    assert t == 0x83 and cfg["sr"] == 10_000_000 and cfg["adc_hz"] == 10_000_000
+    assert (cfg["ss"], cfg["pt"], cfg["tm"], cfg["ph"], cfg["tp"]) == (32, 4, 2, 20, 1)
+    t, p = await xfer(u, sp.GET_CONFIG)
+    assert t == 0x84 and sp.unpack_config(p) == cfg
+    for seq in range(2):
+        t, p = await xfer(u, sp.ACQUIRE)
+        r = sp.unpack_acquire(p)
+        assert t == 0x85 and r["status"] == 0 and r["seq"] == seq
+        assert r["n"] == 32 and r["pt"] == 4 and r["sr"] == 10_000_000
+        assert steps(list(r["samples"])) == [1] * 31
+    # leave packet mode
+    t, p = await xfer(u, sp.TEXT)
+    assert (t, p) == (0x89, b"")
+    await u.cmd("?")
+    assert (await u.line()).startswith("OK SR=10000000SPS")
+
+
+@cocotb.test()
+async def test_packet_errors(dut):
+    u, _ = await setup(dut)
+    await enter_spc(u)
+    f = bytearray(sp.frame(sp.PING, b"x"))
+    f[-1] ^= 0x55                                         # corrupt CRC
+    await u.send(bytes(f))
+    t, p = await read_frame(u)
+    assert t == sp.NAK and p == bytes([1, sp.PING])
+    t, p = await xfer(u, 0x42)
+    assert t == sp.NAK and p == bytes([3, 0x42])
+    t, p = await xfer(u, sp.SET_CONFIG, sp.pack_config(10e6, ss=0))
+    assert t == sp.NAK and p == bytes([4, sp.SET_CONFIG])
+    t, p = await xfer(u, sp.SET_CONFIG, b"short")
+    assert t == sp.NAK and p == bytes([2, sp.SET_CONFIG])
+    await u.send(bytes([sp.SYNC, sp.PING, 100, 0]))      # LEN > 64
+    t, p = await read_frame(u)
+    assert t == sp.NAK and p == bytes([2, sp.PING])
+    await u.send(b"\x00\x13garbage")                     # noise between frames
+    t, p = await xfer(u, sp.PING, b"ok")                  # still in sync
+    assert (t, p) == (0x81, b"ok")
+
+
+@cocotb.test()
+async def test_packet_200msps_and_abort(dut):
+    u, adc = await setup(dut, func=lambda n: n)
+    await enter_spc(u)
+    t, p = await xfer(u, sp.SET_CONFIG, sp.pack_config(200e6, ss=64, tm="immediate"))
+    cfg = sp.unpack_config(p)
+    assert cfg["sr"] == 200_000_000 and cfg["adc_hz"] == 200_000_000
+    t, p = await xfer(u, sp.ACQUIRE)
+    r = sp.unpack_acquire(p)
+    assert r["status"] == 0 and steps(list(r["samples"])) == [1] * 63
+    # normal trigger on a flat input never fires: abort with one byte
+    adc.func = lambda n: 50
+    await xfer(u, sp.SET_CONFIG, sp.pack_config(10e6, ss=64, tm="normal", tl=100))
+    await u.send(sp.frame(sp.ACQUIRE))
+    await Timer(300, unit="us")
+    await u.send(bytes([sp.ABORT_BYTE]))
+    t, p = await read_frame(u)
+    r = sp.unpack_acquire(p)
+    assert t == 0x85 and r["status"] == 2 and r["n"] == 0
+    t, p = await xfer(u, sp.PING, b"alive")
+    assert p == b"alive"
+
+
+@cocotb.test()
+async def test_packet_revision(dut):
+    u, _ = await setup(dut)
+    await enter_spc(u)
+    t, p = await xfer(u, sp.SET_REV, b"PCREV001")
+    assert t == 0x88 and p == b"\x00PCREV001"
+    t, p = await xfer(u, sp.GET_REV)
+    assert (t, p) == (0x87, b"PCREV001")
+    t, p = await xfer(u, sp.SET_REV, b"TOOSHORT"[:5])
+    assert t == sp.NAK and p == bytes([2, sp.SET_REV])
+    assert int(dut.u_fio.bad_access.value) == 0

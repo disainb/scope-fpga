@@ -15,15 +15,22 @@ import re
 DEC_VARS = ["sr", "adc", "ss", "pt", "tl", "th", "ph", "pd", "tp",
             "br", "trig", "n", "d", "col", "nlast", "bus"]
 CHR_VARS = ["of", "tm", "te", "ck",
-            "b7", "b6", "b5", "b4", "b3", "b2", "b1", "b0"]
+            "b7", "b6", "b5", "b4", "b3", "b2", "b1", "b0",
+            "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"]
 
-VERSION = "v0.3"
+VERSION = "v0.4"
+REV = "{$r0}{$r1}{$r2}{$r3}{$r4}{$r5}{$r6}{$r7}"
 
 MSGS = [
     ("BANNER", f"\r\nscope-fpga ADC08200 test {VERSION}   (H = help)\r\n"),
     ("STATUS", "OK SR={sr}SPS ADC={adc}Hz SS={ss} PT={pt} OF={$of} TM={$tm} "
                "TE={$te} TL={tl} TH={th} PH={ph} PD={pd} TP={tp} CK={$ck} BR={br}\r\n"),
     ("BUS",    "BUS={bus} D7..D0={$b7}{$b6}{$b5}{$b4}{$b3}{$b2}{$b1}{$b0}\r\n"),
+    ("REV",    f"REV={REV}\r\n"),
+    ("REVOK",  f"OK REV={REV}\r\n"),
+    ("REVLEN", "ERR revision must be 8 characters\r\n"),
+    ("FLERR",  "ERR flash write failed\r\n"),
+    ("SPC",    "OK SPC - binary packet mode, send TEXT packet or press btn0 to leave\r\n"),
     ("ERR",    "ERR at col {col}\r\n"),
     ("NODATA", "ERR no capture yet\r\n"),
     ("STOP",   "STOPPED\r\n"),
@@ -32,7 +39,7 @@ MSGS = [
     ("END",    "#END\r\n"),
     ("HELP",
      "Commands, comma separated, end with Enter:\r\n"
-     " SR=n[K|M]     sample rate, e.g. SR=10MSPS, SR=500KSPS (max 100M)\r\n"
+     " SR=n[K|M]     sample rate, e.g. SR=200MSPS, SR=10MSPS, SR=500KSPS\r\n"
      " SS=n          samples per capture, 1..16384\r\n"
      " PT=n          pre-trigger samples, 0..SS-1\r\n"
      " OFN OFX OFB   output: decimal lines (plotter), hex, raw binary\r\n"
@@ -40,12 +47,15 @@ MSGS = [
      " TER TEF       trigger edge: rising, falling\r\n"
      " TL=n          trigger level 0..255\r\n"
      " TH=n          trigger hysteresis 0..255\r\n"
-     " PH=n  PHA     capture phase, 5 ns steps (0..2*N-1), A=auto\r\n"
+     " PH=n  PHA     capture phase, 2.5 ns steps (0..2*M-1), A=auto\r\n"
      " PD=0|1        ADC power-down\r\n"
      " TP=0|1        test pattern: ramp instead of ADC data\r\n"
-     " BR=n          UART baud, e.g. BR=921600 (btn0 restores 115200)\r\n"
+     " BR=n          UART baud, e.g. BR=115200 (btn0 restores 921600)\r\n"
      " CK=S|0|1      ADC clock: S=running, 0/1 = held low/high (pin check)\r\n"
      " RB            read the ADC data pins once (bring-up check)\r\n"
+     " WR=xxxxxxxx   write the 8-character board revision to flash\r\n"
+     " RR            read the board revision\r\n"
+     " SPC           switch to binary packet mode (PC application)\r\n"
      " R             run one capture and send it\r\n"
      " C             run continuously, send any key to stop\r\n"
      " D             send the last capture again\r\n"
