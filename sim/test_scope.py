@@ -479,3 +479,20 @@ async def test_packet_revision(dut):
     t, p = await xfer(u, sp.SET_REV, b"TOOSHORT"[:5])
     assert t == sp.NAK and p == bytes([2, sp.SET_REV])
     assert int(dut.u_fio.bad_access.value) == 0
+
+
+@cocotb.test()
+async def test_trigger_not_on_pretrigger_crossing(dut):
+    """A rising crossing inside the pre-trigger window must not cause an
+    immediate trigger when the pre-trigger samples are in.
+
+    Pulse train: low (50) for 50 samples, high (200) for 350, period 400. With
+    300 pre-trigger samples nearly every window holds a low stretch and ends
+    high; firmware 0.4 then triggered on sample 300 at once (v[299] = 200).
+    """
+    u, adc = await setup(dut, func=lambda n: 50 if (n % 400) < 50 else 200)
+    for k in range(2):
+        f, v = await run_ofx(u, "SS=304,PT=300,TL=100,TH=4,TER,TMN,OFX,R")
+        assert f["TRIG"] == "1"
+        assert v[299] == 50 and v[300] == 200, (k, v[296:304])
+        await Timer(13 + 7 * k, unit="us")

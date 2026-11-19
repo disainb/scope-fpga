@@ -179,7 +179,8 @@ module capture #(
     // ======================================================================
     reg  edge_armed = 1'b0;
     wire arm_cond = te_c ? (s_data >= hi_c) : (s_data <= lo_c);
-    wire hit      = edge_armed && (te_c ? (s_data <= tl_c) : (s_data >= tl_c));
+    wire at_level = te_c ? (s_data <= tl_c) : (s_data >= tl_c);
+    wire hit      = edge_armed && at_level;
 
     // ======================================================================
     // capture state machine (clk_cap)
@@ -216,7 +217,11 @@ module capture #(
             end
             if (we) begin
                 wp <= wp + 1'b1;
-                if (arm_cond) edge_armed <= 1'b1;
+                // arm below (rising) / above (falling) the hysteresis band; a crossing that
+                // happens during the pre-trigger samples uses the arming up, so the trigger
+                // is always a real crossing after the pre-trigger window
+                if (arm_cond)                     edge_armed <= 1'b1;
+                else if (st == C_PRE && at_level) edge_armed <= 1'b0;
                 case (st)
                     C_PRE: begin
                         cnt <= cnt - 1'b1;
