@@ -298,7 +298,7 @@ async def test_no_line_ending(dut):
 async def test_baud_change(dut):
     u, _ = await setup(dut)
     await u.cmd("BR=2000000")
-    assert (await u.line()).endswith("BR=2000000")   # reply still at old rate
+    assert " BR=2000000 " in (await u.line())        # reply still at old rate
     await Timer(20, unit="us")
     u.set_baud(2_000_000)
     await u.cmd("?")
