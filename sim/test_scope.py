@@ -580,7 +580,7 @@ async def test_afe_settle_delays_capture(dut):
         await u.line(timeout_us=5000)         # first sample line
         dt = cocotb.utils.get_sim_time("ns") - t0
         await u.lines(7)
-        out_ns = 4 * 10 * 1e9 / BAUD + 5_000  # first line out + capture
+        out_ns = 8 * 10 * 1e9 / BAUD + 5_000  # first line (up to "255\r\n") + capture
         assert dt > ms * MS_NS, (cmd, dt, ms)
         assert dt < (ms + 2) * MS_NS + out_ns, (cmd, dt, ms)
         if ms:

@@ -22,7 +22,7 @@
 //                 The PWM filter's slow pole is 26 ms; this gives 0.5 LSB
 //                 (8-bit ADC, high gain) after any step: 31 ms for 1 code,
 //                 193 ms for the low<->high gain zero-code change, 229 ms max.
-// settle_ms reports the hold-off started by the last change.
+// settle_ms reports the hold-off that ends last (the one captures wait for).
 // -----------------------------------------------------------------------------
 module afe_ctrl #(
     parameter integer MS_CYC      = 100_000,  // clocks per millisecond
@@ -131,8 +131,11 @@ module afe_ctrl #(
                 a_init  <= 1'b0;
                 gain_hi <= s1_gain;
                 // +1: the current ms is already partly gone
-                if (t_max + 16'd1 > left) left <= t_max + 16'd1;
-                if (t_max != 16'd0) settle_ms <= t_max;
+                // settle_ms: the change that sets the end of the hold-off
+                if (t_max + 16'd1 > left) begin
+                    left      <= t_max + 16'd1;
+                    settle_ms <= t_max;
+                end
                 if (s1_chatt) begin
                     if (K1_LATCH != 0) begin
                         k1_set <= s1_att;

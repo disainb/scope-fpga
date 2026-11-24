@@ -156,7 +156,7 @@ code you want. Firmware zero codes (ADC mid-scale with the bench references 0.58
 | 0 | 1 | attenuator (0 ÷1, 1 ÷100) |
 | 1 | 1 | gain (0 low, 1 high) |
 | 2 | 2 | offset code |
-| 4 | 2 | hold-off of the last change, ms |
+| 4 | 2 | hold-off of the latest change that is still the longest, ms |
 | 6 | 1 | 1 = still settling |
 
 **Settling:** every change starts a hold-off. Relay: 5 ms. Gain alone: 1 ms. Offset: 13 + 18 × (number of bits in
