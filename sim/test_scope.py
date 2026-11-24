@@ -159,7 +159,8 @@ async def test_status_defaults(dut):
     await u.cmd("?")
     st = await u.line()
     assert st == ("OK SR=10000000SPS ADC=10000000Hz SS=1024 PT=0 OF=N TM=A TE=R "
-                  f"TL=128 TH=4 PH=20 PD=0 TP=0 CK=S BR={BAUD}"), st
+                  f"TL=128 TH=4 PH=20 PD=0 TP=0 CK=S BR={BAUD} "
+                  "AT=1 GN=L VO=1258 FS=211ms"), st
 
 
 @cocotb.test()
@@ -496,3 +497,143 @@ async def test_trigger_not_on_pretrigger_crossing(dut):
         assert f["TRIG"] == "1"
         assert v[299] == 50 and v[300] == 200, (k, v[296:304])
         await Timer(13 + 7 * k, unit="us")
+
+
+# ----------------------------------------------------------------------------
+# analog front end (firmware 0.5)
+# ----------------------------------------------------------------------------
+MS_NS = 1e9 / 100e6 * int(os.environ.get("TEST_MS_CYC", "200"))   # one "ms" in sim
+
+
+def fe_fields(status):
+    return dict(kv.split("=") for kv in status.split() if "=" in kv)
+
+
+async def pwm_duty(dut, periods=2):
+    """Fraction of time pwm_ofs is high over whole PWM periods (4096 clocks)."""
+    await RisingEdge(dut.u_afe.clk)
+    while int(dut.u_afe.pcnt.value) != 0:
+        await RisingEdge(dut.u_afe.clk)
+    hi = 0
+    for _ in range(4096 * periods):
+        await RisingEdge(dut.u_afe.clk)
+        hi += int(dut.pwm_ofs.value)
+    return hi / (4096 * periods)
+
+
+async def wait_fe_idle(dut):
+    while int(dut.u_afe.busy.value):
+        await RisingEdge(dut.u_afe.clk)
+
+
+@cocotb.test()
+async def test_afe_text_commands(dut):
+    """AT / GN / VO set the relay, gain switch and offset PWM."""
+    u, _ = await setup(dut)
+    assert (int(dut.k1_set.value), int(dut.k1_rst.value), int(dut.gain_hi.value)) == (0, 0, 0)
+    await u.cmd("at=100,gn=h")
+    f = fe_fields(await u.line())
+    assert (f["AT"], f["GN"], f["VO"]) == ("100", "H", "1948"), f
+    await wait_fe_idle(dut)
+    assert (int(dut.k1_set.value), int(dut.k1_rst.value), int(dut.gain_hi.value)) == (1, 0, 1)
+    assert abs(await pwm_duty(dut) - 1948 / 4096) < 1e-6
+    # VO after GN keeps the explicit code; GN alone loads the zero code
+    await u.cmd("GN=L,VO=100")
+    f = fe_fields(await u.line())
+    assert (f["GN"], f["VO"]) == ("L", "100"), f
+    await u.cmd("GN=L")
+    assert fe_fields(await u.line())["VO"] == "1258"
+    await u.cmd("VO=0")
+    assert fe_fields(await u.line())["VO"] == "0"
+    await wait_fe_idle(dut)
+    assert await pwm_duty(dut, 1) == 0.0
+    await u.cmd("VO=4095")
+    await u.line()
+    await wait_fe_idle(dut)
+    assert abs(await pwm_duty(dut, 1) - 4095 / 4096) < 1e-6
+    await u.cmd("AT=1")
+    assert fe_fields(await u.line())["AT"] == "1"
+    await wait_fe_idle(dut)
+    assert int(dut.k1_set.value) == 0
+    for bad in ("AT=10", "AT", "GN=X", "VO=4096", "VO"):
+        await u.cmd(bad)
+        assert (await u.line()).startswith("ERR at col 1"), bad
+
+
+@cocotb.test()
+async def test_afe_settle_delays_capture(dut):
+    """A capture waits for the front end: relay 5 ms, offset 13 + 18*bits ms.
+    The change and R go on one line (a status line takes longer to send than
+    the scaled-down hold-off in simulation)."""
+    u, _ = await setup(dut)
+    await u.cmd("SS=8,TMI,TP=1,OFN")
+    await u.line()
+    await wait_fe_idle(dut)
+    cases = [("VO=1259", 13 + 18 * 1),        # 1 code
+             ("VO=1259", 0),                  # no change
+             ("VO=1947", 13 + 18 * 10),       # 688 codes
+             ("AT=100", 5),                   # relay only
+             ("GN=H,AT=1", 13 + 18 * 1)]      # 1948 vs 1947; relay 5 < 31
+    for cmd, ms in cases:
+        await u.cmd(cmd + ",R")
+        t0 = cocotb.utils.get_sim_time("ns")
+        await u.line(timeout_us=5000)         # first sample line
+        dt = cocotb.utils.get_sim_time("ns") - t0
+        await u.lines(7)
+        out_ns = 4 * 10 * 1e9 / BAUD + 5_000  # first line out + capture
+        assert dt > ms * MS_NS, (cmd, dt, ms)
+        assert dt < (ms + 2) * MS_NS + out_ns, (cmd, dt, ms)
+        if ms:
+            await u.cmd("?")
+            assert fe_fields(await u.line())["FS"] == f"{ms}ms", cmd
+
+
+@cocotb.test()
+async def test_afe_abort_during_settle(dut):
+    """Any key stops R while the front end is still settling."""
+    u, _ = await setup(dut)
+    await u.cmd("VO=0,TMI,SS=8,R")           # 211 ms hold-off
+    await Timer(20 * MS_NS, unit="ns")
+    assert int(dut.u_afe.busy.value) == 1
+    await u.send("x")
+    assert await u.line() == "STOPPED"
+
+
+@cocotb.test()
+async def test_packet_fe(dut):
+    u, _ = await setup(dut)
+    await enter_spc(u)
+    t, p = await xfer(u, sp.GET_INFO)
+    assert sp.unpack_info(p)["fw"] == "0.5"
+    await wait_fe_idle(dut)
+    t, p = await xfer(u, sp.GET_FE)
+    assert t == 0x8B and sp.unpack_fe(p) == dict(att=1, gain="low", ofs=1258,
+                                                 settle_ms=211, busy=0)
+    t, p = await xfer(u, sp.SET_FE, sp.pack_fe(100, "high"))
+    fe = sp.unpack_fe(p)
+    assert t == 0x8A and fe == dict(att=100, gain="high", ofs=1948,
+                                    settle_ms=13 + 18 * 10, busy=1), fe
+    assert int(dut.k1_set.value) == 1 and int(dut.gain_hi.value) == 1
+    # ACQUIRE waits for the hold-off, then returns data
+    await xfer(u, sp.SET_CONFIG, sp.pack_config(10e6, ss=16, tm="immediate", tp=1))
+    t0 = cocotb.utils.get_sim_time("ns")
+    t, p = await xfer(u, sp.ACQUIRE)
+    r = sp.unpack_acquire(p)
+    assert r["status"] == 0 and r["n"] == 16
+    assert int(dut.u_afe.busy.value) == 0
+    # abort while settling
+    await xfer(u, sp.SET_FE, sp.pack_fe(1, "low", 0))
+    await u.send(sp.frame(sp.ACQUIRE))
+    await Timer(30 * MS_NS, unit="ns")
+    await u.send(bytes([sp.ABORT_BYTE]))
+    t, p = await read_frame(u)
+    r = sp.unpack_acquire(p)
+    assert t == 0x85 and r["status"] == 2 and r["n"] == 0
+    # errors
+    t, p = await xfer(u, sp.SET_FE, b"\x00\x00\x00")
+    assert t == sp.NAK and p == bytes([2, sp.SET_FE])
+    for bad in (b"\x02\x00\x00\x00", b"\x00\x02\x00\x00", b"\x00\x00\x00\x10"):
+        t, p = await xfer(u, sp.SET_FE, bad)
+        assert t == sp.NAK and p == bytes([4, sp.SET_FE]), bad
+    t, p = await xfer(u, sp.PING, b"ok")
+    assert p == b"ok"

@@ -4,10 +4,10 @@ FPGA gateware for the USB-C isolated oscilloscope dongle.
 Bring-up target: **Digilent Cmod A7-35T** (`xc7a35tcpg236-1`).
 Production target: Gowin FPGA (see `rtl/gowin/`).
 
-Current state (v0.4): **ADC08200 test design** — up to 200 MSPS, edge trigger with pre-trigger,
+Current state (v0.5): **ADC08200 test design** — up to 200 MSPS, edge trigger with pre-trigger,
 up to 16384 samples, text command line (decimal / hex / binary output), binary packet protocol
 for the PC application (`SPC`, see [docs/protocol.md](docs/protocol.md)), board revision stored
-in the configuration flash.
+in the configuration flash, analog front-end control (attenuator relay, gain, offset PWM).
 
 ## Layout
 
@@ -85,6 +85,18 @@ The build exits with an error if setup or hold timing fails, so a green build me
 VA / VDR from Pmod JA pin 6 or 12 (3.3 V); grounds to DIP pin 25 and Pmod JA 5/11.
 **Never connect DIP pin 24 (VU = USB 5 V) to the ADC.**
 
+## Analog front-end wiring
+
+| AFE net | Cmod A7 DIP pin | FPGA pin | Notes |
+|---|---|---|---|
+| GAIN_HI | 37 | V4 | U3/U4 select, high = high gain |
+| K1_SET | 38 | U4 | Q1 gate (R40). High = ÷100 (EE2-3NU energised) |
+| K1_RST | 39 | V5 | Only for a latching relay + H-bridge (build with `K1_LATCH=1`) |
+| PWM_OFS | 40 | W4 | R11. 24.4 kHz, 12 bit; VOFS = code/4096 × 3.3 V |
+
+Common ground: AFE GND to a Cmod GND (DIP 25). VOFS scales with the Cmod's 3V3, so the
+offset is only as stable as that rail; calibrate the zero codes on the bench.
+
 ## Bench use
 
 Open the Cmod's USB serial port (higher-numbered of the two FTDI ports) at **921600 8N1**.
@@ -118,6 +130,9 @@ A line with no line ending is executed after 30 ms of silence.
 | `TP=0\|1` | Test pattern: ramp instead of ADC data (checks the UART/plot path) | 0 |
 | `BR=n` | UART baud, e.g. `BR=115200`, up to 6.25 Mbaud. Applied after the reply; btn0 restores 921600 | 921600 |
 | `CK=S\|0\|1` | ADC clock running, or held low/high for a multimeter check | S |
+| `AT=1\|100` | Input attenuator ÷1 / ÷100 (relay) | 1 |
+| `GN=L\|H` | Gain low (×1.33) / high (×13.5). Also loads `VO` with that gain's zero code | L |
+| `VO=n` | Offset PWM code 0..4095. Put it after `GN` on the same line | 1258 |
 | `RB` | Read the 8 ADC data pins once (`BUS=128 D7..D0=10000000`) | |
 | `WR=xxxxxxxx` | Write the 8-character board revision to flash (upper-cased, no commas/spaces). Takes ~0.1 s | |
 | `RR` | Read the board revision (`REV=--------` if never written) | |
@@ -127,6 +142,11 @@ A line with no line ending is executed after 30 ms of silence.
 | `D` | Send the last capture again (e.g. after changing OF) | |
 | `?` | Show settings | |
 | `H` | Help | |
+
+Front-end changes start a hold-off and the next capture waits for it: relay 5 ms, offset
+13 + 18 × (bits in |Δcode|) ms (the 16 Hz PWM filter), up to 229 ms. `FS=` in the status line
+shows the last one. Ranges with the bench ADC references: ÷1 low ±0.56 V, ÷1 high ±56 mV,
+÷100 low ±56 V, ÷100 high ±5.6 V.
 
 Settings-only lines reply with the status line (`OK SR=... ADC=...`).
 Lines containing R/C/D/?/H reply only with their output, so a run line in `OFN` mode

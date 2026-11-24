@@ -40,6 +40,17 @@ set_property -dict { PACKAGE_PIN W3  IOSTANDARD LVCMOS33 } [get_ports adc_pd]   
 ## wiring rings badly at 10-50 MHz (slow slew is too slow for 200 MHz).
 set_property -dict { PACKAGE_PIN W5  IOSTANDARD LVCMOS33 SLEW FAST DRIVE 8 } [get_ports adc_clk] ;# DIP 36 - ADC 24
 
+## Analog front end, DIP pins 37-40 (bank 34, next to the ADC group).
+##   GAIN_HI -> U3/U4 74LVC1G3157 select (high = high gain)
+##   K1_SET  -> Q1 2N7002 gate via R40 (high = /100, EE2-3NU energised)
+##   K1_RST  -> only used with a latching relay + H-bridge (K1_LATCH = 1)
+##   PWM_OFS -> R11 10k (24.4 kHz, 12 bit). VOFS = code/4096 x 3.3 V of the
+##              Cmod's own 3V3, so tie the AFE ground to a Cmod GND pin.
+set_property -dict { PACKAGE_PIN V4  IOSTANDARD LVCMOS33 } [get_ports gain_hi] ;# DIP 37
+set_property -dict { PACKAGE_PIN U4  IOSTANDARD LVCMOS33 } [get_ports k1_set]  ;# DIP 38
+set_property -dict { PACKAGE_PIN V5  IOSTANDARD LVCMOS33 } [get_ports k1_rst]  ;# DIP 39
+set_property -dict { PACKAGE_PIN W4  IOSTANDARD LVCMOS33 SLEW SLOW DRIVE 4 } [get_ports pwm_ofs] ;# DIP 40
+
 ## Configuration flash, used after configuration for the board revision record
 ## (last 4 KB sector). SCK reaches the flash through STARTUPE2 (CCLK).
 set_property -dict { PACKAGE_PIN K19 IOSTANDARD LVCMOS33 } [get_ports qspi_cs]
@@ -58,6 +69,7 @@ set_false_path -to   [get_ports {led[*] led0_* uart_rxd_out}]
 ## steps), so the board-level I/O timing is calibrated on the bench, not by STA.
 set_false_path -from [get_ports {adc_d[*]}]
 set_false_path -to   [get_ports {adc_clk adc_pd}]
+set_false_path -to   [get_ports {gain_hi k1_set k1_rst pwm_ofs}]
 
 ## Flash: slow SPI (12.5 MHz) driven from registers, sampled with half a
 ## period of margin by design.

@@ -1,6 +1,6 @@
 # Scope dongle – serial PC protocol (packet mode)
 
-Protocol version **1**, firmware **0.4**. Reference implementation: `host/scope_proto.py`.
+Protocol version **1**, firmware **0.5** (SET_FE / GET_FE need 0.5 or later; check INFO). Reference implementation: `host/scope_proto.py`.
 
 ## Entering and leaving
 
@@ -54,6 +54,8 @@ noise). The link is half-duplex: send one request, wait for its response.
 | `0x07` | GET_REV | – | `0x87`, 8 ASCII characters |
 | `0x08` | SET_REV | 8 ASCII characters | `0x88`, status (0 ok, 1 flash error) + 8 characters read back |
 | `0x09` | TEXT | – | `0x89`, empty; then text mode |
+| `0x0A` | SET_FE | FE_REQ (4 bytes) | `0x8A`, FE (7 bytes) |
+| `0x0B` | GET_FE | – | `0x8B`, FE (7 bytes) |
 | | *(any other)* | | NAK |
 
 ### NAK (`0xFF`)
@@ -135,6 +137,37 @@ while it waits (by convention `0x18`) aborts the capture and the board answers w
 
 **Transfer time** at 921600 baud ≈ 11 µs per byte: 1024 samples ≈ 11 ms, 16384 ≈ 180 ms.
 
+### FE_REQ (4 bytes, SET_FE) – analog front end, firmware 0.5+
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | attenuator: 0 = ÷1, 1 = ÷100 (relay K1) |
+| 1 | 1 | gain: 0 = low (×1.33), 1 = high (×13.5) |
+| 2 | 2 | offset PWM code 0..4095 (VOFS = code / 4096 × 3.3 V) |
+
+Anything else is NAK 4. Unlike the text command `GN`, SET_FE never changes the offset by itself: send the
+code you want. Firmware zero codes (ADC mid-scale with the bench references 0.58 / 2.08 V):
+1258 low gain, 1948 high gain. The PC app should calibrate its own.
+
+### FE (7 bytes, SET/GET_FE response)
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | attenuator (0 ÷1, 1 ÷100) |
+| 1 | 1 | gain (0 low, 1 high) |
+| 2 | 2 | offset code |
+| 4 | 2 | hold-off of the last change, ms |
+| 6 | 1 | 1 = still settling |
+
+**Settling:** every change starts a hold-off. Relay: 5 ms. Gain alone: 1 ms. Offset: 13 + 18 × (number of bits in
+|Δcode|) ms, from the 2-pole 16 Hz PWM filter; 31 ms for a 1-code step, 193 ms for the low↔high gain zero
+codes, 229 ms max. ACQUIRE waits for the hold-off before arming. The abort byte works during the wait, too.
+Allow for it in host timeouts: up to 229 ms + capture + transfer.
+
+**Input ranges** (bench ADC references, full scale 1.5 V at the ADC): ÷1 low ±0.56 V, ÷1 high ±56 mV,
+÷100 low ±56 V, ÷100 high ±5.6 V. Volts at the input = (code − mid code) × 1.5 V / 256 / (gain × attenuation), with
+gain 1.334 / 13.5 and attenuation 1 / 0.01. Calibrate gain and zero per range.
+
 ## Example
 
 PING with payload `hi`:
@@ -151,4 +184,5 @@ device ← A5 81 02 00 68 69 xx xx
 | `Info` | GET_INFO (`MaxSampleRate`, `AdcBits`, `RecordLength`) |
 | `SetTimebase` | SET_CONFIG: sample rate from s/div × divisions / SS; `TriggerPosition` × SS → PT |
 | `SetTrigger` | SET_CONFIG: level/hysteresis converted to codes, slope, mode (Single → normal, one ACQUIRE) |
+| `SetChannel` (V/div, offset) | SET_FE: smallest range that holds 8 div × V/div; offset → code around the zero code |
 | `Acquire` | ACQUIRE; `AcqInfo.Triggered`, `TriggerIndex` = PT, `Sequence`, `SampleRate` from the header; status 2 → `NoTrigger` |

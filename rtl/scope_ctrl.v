@@ -7,7 +7,10 @@
 //   Case-insensitive, spaces ignored. Token = KEY[=]VALUE, KEY = 1-2 letters:
 //     SR=10MSPS SS=1024 PT=0 OFN|OFX|OFB TMA|TMN|TMI TER|TEF TL=128 TH=4
 //     PH=n|PHA PD=0|1 TP=0|1 BR=921600 CK=S|0|1 RB WR=xxxxxxxx RR SPC
+//     AT=1|100 GN=L|H VO=0..4095   (analog front end, see afe_ctrl.v)
 //     R C D ? H
+//   GN loads VO with the zero code of the new gain (VZ_LO / VZ_HI), so give
+//   VO after GN on the same line. Captures wait for the front end to settle.
 //   Settings-only lines answer with the status line; R/C/D/?/H/RB/RR/WR
 //   answer with their own output. Errors: "ERR at col n", rest of line dropped.
 //   During a capture or dump any character except CR/LF stops it.
@@ -20,7 +23,9 @@
 module scope_ctrl #(
     parameter SYS_HZ  = 100_000_000,
     parameter BAUD    = 921_600,
-    parameter LINE_TO = 3_000_000      // idle clocks that end a line / frame
+    parameter LINE_TO = 3_000_000,     // idle clocks that end a line / frame
+    parameter [11:0] VZ_LO = 12'd1258, // offset code for ADC mid-scale, low gain
+    parameter [11:0] VZ_HI = 12'd1948  //   (1.014 V / 1.570 V at 3.3 V PWM high)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -63,6 +68,12 @@ module scope_ctrl #(
     input  wire        rev_busy,
     input  wire        rev_done,
     input  wire        rev_err,
+    // analog front end
+    output reg         fe_att,
+    output reg         fe_gain,
+    output reg  [11:0] fe_ofs,
+    input  wire        fe_busy,
+    input  wire [15:0] fe_settle,
     // status
     output reg         running,
     output reg         cont_mode,
@@ -81,7 +92,7 @@ module scope_ctrl #(
     localparam [1:0]   OF_N = 2'd0, OF_X = 2'd1, OF_B = 2'd2;
     localparam [7:0]   CH_CR = 8'h0D, CH_LF = 8'h0A, CH_SP = 8'h20;
     localparam [7:0]   SYNC = 8'hA5;
-    localparam [7:0]   PROTO_VER = 8'd1, FW_MAJ = 8'd0, FW_MIN = 8'd4;
+    localparam [7:0]   PROTO_VER = 8'd1, FW_MAJ = 8'd0, FW_MIN = 8'd5;
 
     // NAK codes
     localparam [7:0] NAK_CRC = 8'd1, NAK_LEN = 8'd2, NAK_TYPE = 8'd3,
@@ -104,7 +115,7 @@ module scope_ctrl #(
         K_SYNC  = 7'd40, K_TYPE  = 7'd41, K_L0    = 7'd42, K_L1    = 7'd43,
         K_PAY   = 7'd44, K_C0    = 7'd45, K_C1    = 7'd46, K_DISP  = 7'd47,
         K_CFG   = 7'd48, K_CFGR  = 7'd49, K_ARM   = 7'd50, K_WAIT  = 7'd51,
-        K_REVGO = 7'd52, K_REVW  = 7'd53,
+        K_REVGO = 7'd52, K_REVW  = 7'd53, K_FEW   = 7'd54, K_FER   = 7'd55,
         // packet transmit
         T_SYNC  = 7'd60, T_TYPE  = 7'd61, T_L0    = 7'd62, T_L1    = 7'd63,
         T_HDR   = 7'd64, T_DADDR = 7'd65, T_DW1   = 7'd66, T_DW2   = 7'd67,
@@ -201,6 +212,8 @@ module scope_ctrl #(
                        (p_pt < p_ss) && (lbuf[8] <= 8'd2) && (lbuf[9] <= 8'd1) &&
                        (lbuf[12] == 8'hFF || lbuf[12] <= 8'd39) &&
                        (lbuf[13] <= 8'd1) && (lbuf[14] <= 8'd1);
+    // SET_FE payload: att, gain, ofs (u16)
+    wire        p_fe_ok = (lbuf[0] <= 8'd1) && (lbuf[1] <= 8'd1) && (lbuf[3] <= 8'h0F);
 
     // ---- message ROM ----------------------------------------------------------------------
     reg  [MSG_AW-1:0] m_addr;
@@ -227,6 +240,9 @@ module scope_ctrl #(
             V_COL:   vval = {25'd0, tok_col};
             V_NLAST: vval = {17'd0, n_last};
             V_BUS:   vval = {24'd0, bus_snap};
+            V_AT:    vval = fe_att ? 32'd100 : 32'd1;
+            V_VO:    vval = {20'd0, fe_ofs};
+            V_FS:    vval = {16'd0, fe_settle};
             default: vval = 32'd0;
         endcase
     end
@@ -238,6 +254,7 @@ module scope_ctrl #(
             C_TM:    cval = (cfg_tm == 2'd1) ? "N" : (cfg_tm == 2'd2) ? "I" : "A";
             C_TE:    cval = cfg_te ? "F" : "R";
             C_CK:    cval = (cfg_ck == 2'd1) ? "0" : (cfg_ck == 2'd2) ? "1" : "S";
+            C_GN:    cval = fe_gain ? "H" : "L";
             C_B7:    cval = bus_snap[7] ? "1" : "0";
             C_B6:    cval = bus_snap[6] ? "1" : "0";
             C_B5:    cval = bus_snap[5] ? "1" : "0";
@@ -325,6 +342,9 @@ module scope_ctrl #(
             cont_mode <= 1'b0;
             pmode     <= 1'b0;
             rev_wr_data <= 64'd0;
+            fe_att    <= 1'b0;
+            fe_gain   <= 1'b0;
+            fe_ofs    <= VZ_LO;
             k_type    <= 8'd0;
             k_len     <= 16'd0;
             k_crc     <= 16'hFFFF;
@@ -342,7 +362,7 @@ module scope_ctrl #(
         end else begin
             // stop requests while busy
             if (rx_valid) begin
-                if (state == K_WAIT)
+                if (state == K_WAIT || state == K_ARM)
                     abort_req <= 1'b1;
                 else if (!pmode && state != S_IDLE && !is_crlf)
                     abort_req <= 1'b1;
@@ -550,6 +570,21 @@ module scope_ctrl #(
                                 br_req <= num;
                                 state  <= X_BR1;
                             end else state <= E_ERR;
+                        "AT":
+                            if      (has_num && num == 32'd1)   fe_att <= 1'b0;
+                            else if (has_num && num == 32'd100) fe_att <= 1'b1;
+                            else state <= E_ERR;
+                        "GN":
+                            if (vch == "L") begin
+                                fe_gain <= 1'b0;
+                                fe_ofs  <= VZ_LO;
+                            end else if (vch == "H") begin
+                                fe_gain <= 1'b1;
+                                fe_ofs  <= VZ_HI;
+                            end else state <= E_ERR;
+                        "VO":
+                            if (has_num && num <= 32'd4095) fe_ofs <= num[11:0];
+                            else state <= E_ERR;
                         "RB": begin
                             printed  <= 1'b1;
                             bus_snap <= bus_now;
@@ -686,12 +721,20 @@ module scope_ctrl #(
                     end
 
                 // ---- run -------------------------------------------------------------------
-                R_ARM: begin
-                    cap_arm <= 1'b1;
-                    n_last  <= cfg_ss;
-                    running <= 1'b1;
-                    state   <= R_WAIT;
-                end
+                // waits while the front end settles (relay, offset filter)
+                R_ARM:
+                    if (abort_req) begin
+                        running   <= 1'b0;
+                        cont_mode <= 1'b0;
+                        m_addr    <= MSG_STOP;
+                        m_ret     <= L_BAUD;
+                        state     <= M_FETCH;
+                    end else if (!fe_busy) begin
+                        cap_arm <= 1'b1;
+                        n_last  <= cfg_ss;
+                        running <= 1'b1;
+                        state   <= R_WAIT;
+                    end
                 R_WAIT:
                     if (cap_done) begin
                         have_cap <= 1'b1;
@@ -945,6 +988,20 @@ module scope_ctrl #(
                                                 lbuf[4], lbuf[5], lbuf[6], lbuf[7]};
                                 state <= K_REVGO;
                             end
+                        8'h0A:                                        // SET_FE
+                            if (k_len != 16'd4) begin
+                                rbuf[0] <= NAK_LEN; rbuf[1] <= k_type;
+                                t_type  <= 8'hFF;   t_hlen  <= 7'd2;
+                            end else if (!p_fe_ok) begin
+                                rbuf[0] <= NAK_ARG; rbuf[1] <= k_type;
+                                t_type  <= 8'hFF;   t_hlen  <= 7'd2;
+                            end else begin
+                                fe_att  <= lbuf[0][0];
+                                fe_gain <= lbuf[1][0];
+                                fe_ofs  <= {lbuf[3][3:0], lbuf[2]};
+                                state   <= K_FEW;
+                            end
+                        8'h0B: state <= K_FER;                        // GET_FE
                         8'h09: begin                                  // TEXT: leave
                             t_hlen <= 7'd0;
                             t_exit <= 1'b1;
@@ -1001,13 +1058,16 @@ module scope_ctrl #(
                     state    <= T_SYNC;
                 end
 
-                K_ARM: begin
-                    cap_arm   <= 1'b1;
-                    n_last    <= cfg_ss;
-                    running   <= 1'b1;
-                    abort_req <= 1'b0;
-                    state     <= K_WAIT;
-                end
+                // waits while the front end settles; the abort byte still works
+                K_ARM:
+                    if (abort_req)
+                        state <= K_WAIT;                 // answers "aborted"
+                    else if (!fe_busy) begin
+                        cap_arm <= 1'b1;
+                        n_last  <= cfg_ss;
+                        running <= 1'b1;
+                        state   <= K_WAIT;
+                    end
                 K_WAIT:
                     if (cap_done || abort_req) begin
                         running <= 1'b0;
@@ -1035,6 +1095,26 @@ module scope_ctrl #(
                         t_src  <= 1'b0;
                         state  <= T_SYNC;
                     end
+
+                // SET_FE: give afe_ctrl a few clocks to compute the new hold-off
+                K_FEW: begin
+                    k_idx <= k_idx + 7'd1;
+                    if (k_idx[2:0] == 3'd7) state <= K_FER;
+                end
+                K_FER: begin                                          // FE response
+                    rbuf[0] <= {7'd0, fe_att};
+                    rbuf[1] <= {7'd0, fe_gain};
+                    rbuf[2] <= fe_ofs[7:0];
+                    rbuf[3] <= {4'd0, fe_ofs[11:8]};
+                    rbuf[4] <= fe_settle[7:0];
+                    rbuf[5] <= fe_settle[15:8];
+                    rbuf[6] <= {7'd0, fe_busy};
+                    t_type  <= k_type | 8'h80;
+                    t_hlen  <= 7'd7;
+                    t_src   <= 1'b0;
+                    t_dn    <= 15'd0;
+                    state   <= T_SYNC;
+                end
 
                 K_REVGO:
                     if (!rev_busy) begin

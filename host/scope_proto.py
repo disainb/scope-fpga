@@ -16,6 +16,7 @@ MAX_REQ_PAYLOAD = 64
 
 PING, GET_INFO, SET_CONFIG, GET_CONFIG, ACQUIRE = 0x01, 0x02, 0x03, 0x04, 0x05
 GET_REV, SET_REV, TEXT = 0x07, 0x08, 0x09
+SET_FE, GET_FE = 0x0A, 0x0B          # firmware 0.5+
 NAK = 0xFF
 ABORT_BYTE = 0x18          # any byte aborts a waiting ACQUIRE; CAN by convention
 
@@ -100,3 +101,22 @@ def unpack_acquire(p):
 
 def unpack_nak(p):
     return dict(code=p[0], request=p[1], reason=NAK_CODES.get(p[0], "?"))
+
+
+# ---- analog front end (firmware 0.5+) ---------------------------------------------
+VZ_LO, VZ_HI = 1258, 1948      # firmware default zero codes (ADC mid-scale)
+
+
+def pack_fe(att=1, gain="low", ofs=None):
+    """SET_FE payload, 4 bytes. att = 1 or 100; gain = 'low'/'high' or 0/1;
+    ofs = PWM code 0..4095 (None -> zero code of the gain)."""
+    g = {"low": 0, "high": 1}[gain] if isinstance(gain, str) else gain
+    if ofs is None:
+        ofs = VZ_HI if g else VZ_LO
+    return struct.pack("<BBH", 1 if att == 100 else 0, g, ofs)
+
+
+def unpack_fe(p):
+    att, gain, ofs, settle, busy = struct.unpack("<BBHHB", p)
+    return dict(att=100 if att else 1, gain="high" if gain else "low", ofs=ofs,
+                settle_ms=settle, busy=busy)

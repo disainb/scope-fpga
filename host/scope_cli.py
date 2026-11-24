@@ -51,7 +51,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("port")
-    ap.add_argument("cmd", choices=["ping", "info", "rev", "setrev", "config", "acquire", "text"])
+    ap.add_argument("cmd", choices=["ping", "info", "rev", "setrev", "fe", "config", "acquire", "text"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--baud", type=int, default=921600)
     ap.add_argument("--sr", type=float, default=10e6)
@@ -63,6 +63,10 @@ def main():
     ap.add_argument("--hyst", type=int, default=4)
     ap.add_argument("--ph", type=int, default=None)
     ap.add_argument("--tp", type=int, default=0)
+    ap.add_argument("--att", type=int, choices=[1, 100], default=None,
+                    help="fe / acquire: input attenuator")
+    ap.add_argument("--gain", choices=["low", "high"], default=None)
+    ap.add_argument("--ofs", type=int, default=None, help="offset PWM code 0..4095")
     ap.add_argument("--csv")
     a = ap.parse_args()
 
@@ -83,7 +87,14 @@ def main():
             sys.exit("revision must be exactly 8 characters")
         _, p = d.request(sp.SET_REV, rev, timeout=3.0)
         print("OK" if p[0] == 0 else "FLASH ERROR", p[1:].decode("ascii", "replace"))
-    elif a.cmd in ("config", "acquire"):
+    elif a.cmd == "fe" or (a.cmd == "acquire" and (a.att or a.gain or a.ofs is not None)):
+        cur = sp.unpack_fe(d.request(sp.GET_FE)[1])
+        if a.att or a.gain or a.ofs is not None:
+            gain = a.gain or cur["gain"]
+            ofs = a.ofs if a.ofs is not None else (None if a.gain else cur["ofs"])
+            cur = sp.unpack_fe(d.request(sp.SET_FE, sp.pack_fe(a.att or cur["att"], gain, ofs))[1])
+        print(cur)
+    if a.cmd in ("config", "acquire"):
         cfg = sp.pack_config(a.sr, a.ss, a.pt, a.mode, a.edge, a.level, a.hyst, a.ph, 0, a.tp)
         print(sp.unpack_config(d.request(sp.SET_CONFIG, cfg)[1]))
         if a.cmd == "acquire":

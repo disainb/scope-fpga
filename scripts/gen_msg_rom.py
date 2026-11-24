@@ -13,18 +13,19 @@ import os
 import re
 
 DEC_VARS = ["sr", "adc", "ss", "pt", "tl", "th", "ph", "pd", "tp",
-            "br", "trig", "n", "d", "col", "nlast", "bus"]
-CHR_VARS = ["of", "tm", "te", "ck",
+            "br", "trig", "n", "d", "col", "nlast", "bus", "at", "vo", "fs"]
+CHR_VARS = ["of", "tm", "te", "ck", "gn",
             "b7", "b6", "b5", "b4", "b3", "b2", "b1", "b0",
             "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"]
 
-VERSION = "v0.4.1"
+VERSION = "v0.5"
 REV = "{$r0}{$r1}{$r2}{$r3}{$r4}{$r5}{$r6}{$r7}"
 
 MSGS = [
     ("BANNER", f"\r\nscope-fpga ADC08200 test {VERSION}   (H = help)\r\n"),
     ("STATUS", "OK SR={sr}SPS ADC={adc}Hz SS={ss} PT={pt} OF={$of} TM={$tm} "
-               "TE={$te} TL={tl} TH={th} PH={ph} PD={pd} TP={tp} CK={$ck} BR={br}\r\n"),
+               "TE={$te} TL={tl} TH={th} PH={ph} PD={pd} TP={tp} CK={$ck} BR={br} "
+               "AT={at} GN={$gn} VO={vo} FS={fs}ms\r\n"),
     ("BUS",    "BUS={bus} D7..D0={$b7}{$b6}{$b5}{$b4}{$b3}{$b2}{$b1}{$b0}\r\n"),
     ("REV",    f"REV={REV}\r\n"),
     ("REVOK",  f"OK REV={REV}\r\n"),
@@ -52,6 +53,9 @@ MSGS = [
      " TP=0|1        test pattern: ramp instead of ADC data\r\n"
      " BR=n          UART baud, e.g. BR=115200 (btn0 restores 921600)\r\n"
      " CK=S|0|1      ADC clock: S=running, 0/1 = held low/high (pin check)\r\n"
+     " AT=1|100      input attenuator (relay K1)\r\n"
+     " GN=L|H        gain low / high; also sets VO to that gain's zero code\r\n"
+     " VO=n          offset PWM code 0..4095 (VOFS = n/4096 * 3.3 V)\r\n"
      " RB            read the ADC data pins once (bring-up check)\r\n"
      " WR=xxxxxxxx   write the 8-character board revision to flash\r\n"
      " RR            read the board revision\r\n"
@@ -61,7 +65,8 @@ MSGS = [
      " D             send the last capture again\r\n"
      " ?             show settings\r\n"
      " H             this help\r\n"
-     "Example: SR=10MSPS,SS=1024,OFN,R\r\n"),
+     "Example: SR=10MSPS,SS=1024,OFN,R    AT=100,GN=H,VO=1960,R\r\n"
+     "FS = front-end settle time of the last change; captures wait for it.\r\n"),
 ]
 
 PH_RE = re.compile(r"\{(\$?)(\w+)\}")

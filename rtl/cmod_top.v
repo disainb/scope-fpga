@@ -9,6 +9,7 @@
 //       text commands  e.g.  SR=10MSPS,SS=1024,OFN,R
 //       SPC switches to the binary packet protocol (docs/protocol.md)
 //   * board revision (WR/RR) kept in the last 4 KB sector of the config flash
+//   * analog front end (afe_ctrl.v): K1 attenuator relay, GAIN_HI, offset PWM
 //
 //   led[0]  heartbeat            led[1]  capture running
 //   RGB green = MMCM locked      RGB blue = continuous mode
@@ -19,7 +20,9 @@ module cmod_top #(
     parameter SYS_HZ  = 100_000_000,
     parameter BAUD    = 921_600,
     parameter LINE_TO = 3_000_000,     // 30 ms idle ends a command line / frame
-    parameter AUTO_TO = 10_000_000     // 100 ms auto-trigger timeout (SYS clocks)
+    parameter AUTO_TO = 10_000_000,    // 100 ms auto-trigger timeout (SYS clocks)
+    parameter MS_CYC  = SYS_HZ / 1000, // clocks per ms (front-end settle timer)
+    parameter K1_LATCH = 0             // 0: EE2-3NU non-latching, 1: latching + H-bridge
 ) (
     input  wire       clk_12m,
     input  wire [1:0] btn,
@@ -38,7 +41,12 @@ module cmod_top #(
     output wire       qspi_dq0,
     input  wire       qspi_dq1,
     output wire       qspi_dq2,
-    output wire       qspi_dq3
+    output wire       qspi_dq3,
+    // analog front end
+    output wire       k1_set,
+    output wire       k1_rst,
+    output wire       gain_hi,
+    output wire       pwm_ofs
 );
     // ---- clock & reset ------------------------------------------------------
     wire clk, clk_cap, locked, rst;
@@ -112,6 +120,9 @@ module cmod_top #(
     wire [13:0] rd_rel;
     wire [7:0]  rd_data;
     wire        running, cont_mode, pmode;
+    wire        fe_att, fe_gain, fe_busy;
+    wire [11:0] fe_ofs;
+    wire [15:0] fe_settle;
 
     scope_ctrl #(
         .SYS_HZ(SYS_HZ), .BAUD(BAUD), .LINE_TO(LINE_TO)
@@ -127,7 +138,17 @@ module cmod_top #(
         .cap_trig(cap_trig), .rd_rel(rd_rel), .rd_data(rd_data),
         .rev_wr_go(rev_wr_go), .rev_wr_data(rev_wr_data), .rev(rev),
         .rev_busy(rev_busy), .rev_done(rev_done), .rev_err(rev_err),
+        .fe_att(fe_att), .fe_gain(fe_gain), .fe_ofs(fe_ofs),
+        .fe_busy(fe_busy), .fe_settle(fe_settle),
         .running(running), .cont_mode(cont_mode), .pmode(pmode)
+    );
+
+    // ---- analog front end -----------------------------------------------------------
+    afe_ctrl #(.MS_CYC(MS_CYC), .K1_LATCH(K1_LATCH)) u_afe (
+        .clk(clk), .rst(rst),
+        .att(fe_att), .gain(fe_gain), .ofs(fe_ofs),
+        .k1_set(k1_set), .k1_rst(k1_rst), .gain_hi(gain_hi), .pwm_ofs(pwm_ofs),
+        .busy(fe_busy), .settle_ms(fe_settle)
     );
 
     // ---- ADC capture (200 MHz) ----------------------------------------------------

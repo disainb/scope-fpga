@@ -19,16 +19,19 @@ COCOTB_TEST_MODULES := test_scope
 TEST_BAUD    ?= 1000000
 TEST_LINE_TO ?= 20000
 TEST_AUTO_TO ?= 50000
-export TEST_BAUD TEST_LINE_TO TEST_AUTO_TO
+# 1 "ms" of front-end settle time = 2 us in simulation
+TEST_MS_CYC  ?= 200
+export TEST_BAUD TEST_LINE_TO TEST_AUTO_TO TEST_MS_CYC
 
 ifeq ($(SIM),icarus)
   COMPILE_ARGS += -I$(ROOT)/rtl \
                   -Pcmod_top.BAUD=$(TEST_BAUD) \
                   -Pcmod_top.LINE_TO=$(TEST_LINE_TO) \
-                  -Pcmod_top.AUTO_TO=$(TEST_AUTO_TO)
+                  -Pcmod_top.AUTO_TO=$(TEST_AUTO_TO) \
+                  -Pcmod_top.MS_CYC=$(TEST_MS_CYC)
 else ifeq ($(SIM),verilator)
   EXTRA_ARGS   += -I$(ROOT)/rtl -Wno-fatal \
-                  -GBAUD=$(TEST_BAUD) -GLINE_TO=$(TEST_LINE_TO) -GAUTO_TO=$(TEST_AUTO_TO)
+                  -GBAUD=$(TEST_BAUD) -GLINE_TO=$(TEST_LINE_TO) -GAUTO_TO=$(TEST_AUTO_TO) -GMS_CYC=$(TEST_MS_CYC)
 endif
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
